@@ -3827,8 +3827,12 @@ class CarWebServer {
 private:
     static WebServer server;
     
-    static String buildHTMLPage() {
-        return R"rawliteral(<!DOCTYPE html>
+    // ================================================================
+// CarWebServer 类 - 修改 buildHTMLPage() 添加混沌随机数和随机增强数显示
+// ================================================================
+
+static String buildHTMLPage() {
+    return R"rawliteral(<!DOCTYPE html>
 <html>
 <head>
 <meta charset='UTF-8'>
@@ -3852,10 +3856,15 @@ body{font-family:-apple-system,system-ui,sans-serif;background:#0d1117;color:#e6
 .stat-value.danger{color:#f85149;}
 .stat-value.blue{color:#58a6ff;}
 .stat-value.purple{color:#a78bfa;}
+.stat-value.orange{color:#f59e0b;}
+.stat-value.cyan{color:#22d3ee;}
 .sensor-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;}
 .sensor-item{background:#0d1117;border-radius:6px;padding:6px 10px;font-size:12px;display:flex;justify-content:space-between;}
 .sensor-item .label{color:#8b949e;}
 .sensor-item .value{color:#58a6ff;font-weight:600;}
+.sensor-item .value.orange{color:#f59e0b;}
+.sensor-item .value.cyan{color:#22d3ee;}
+.sensor-item .value.purple{color:#a78bfa;}
 .state-matrix{display:flex;gap:6px;flex-wrap:wrap;}
 .state-box{padding:6px 14px;border-radius:6px;border:2px solid #30363d;font-size:11px;font-weight:600;color:#8b949e;background:transparent;flex:1;text-align:center;transition:all 0.3s;}
 .state-box.active{transform:scale(1.02);}
@@ -3917,11 +3926,16 @@ input[type=number]{background:#0d1117;border:1px solid #30363d;color:#c9d1d9;pad
 <div class="stat-item"><div class="stat-label">规则数</div><div class="stat-value purple" id="rules">-</div></div>
 <div class="stat-item"><div class="stat-label">混沌超时</div><div class="stat-value warn" id="chaosTimeout">-</div></div>
 </div>
+<div class="stat-grid" style="margin-top:6px;">
+<div class="stat-item"><div class="stat-label">🎲 混沌噪声</div><div class="stat-value orange" id="chaosNoise">-</div></div>
+<div class="stat-item"><div class="stat-label">📢 噪声放大器</div><div class="stat-value cyan" id="chaosAmplifier">-</div></div>
+</div>
 <div class="sensor-grid" style="margin-top:6px;">
 <div class="sensor-item"><span class="label">⬅ 左传感器</span><span class="value" id="sL">-</span></div>
 <div class="sensor-item"><span class="label">➡ 右传感器</span><span class="value" id="sR">-</span></div>
 <div class="sensor-item"><span class="label">左编码器</span><span class="value" id="encL">-</span></div>
 <div class="sensor-item"><span class="label">右编码器</span><span class="value" id="encR">-</span></div>
+<div class="sensor-item" style="grid-column: span 2; background:#1a1a2e;"><span class="label">🌊 原始噪声 (GPIO1)</span><span class="value purple" id="noiseRaw">-</span></div>
 </div>
 </div>
 <div class="card">
@@ -3991,10 +4005,13 @@ document.getElementById('survival').textContent=(d.survival/1000).toFixed(1)+'s'
 document.getElementById('dist').textContent=d.distance+' ticks';
 document.getElementById('rules').textContent=d.ruleCount;
 document.getElementById('chaosTimeout').textContent=d.chaosTimeoutMs+'ms';
+document.getElementById('chaosNoise').textContent=d.chaosNoise || '0';
+document.getElementById('chaosAmplifier').textContent=d.chaosAmplifier || '0';
 document.getElementById('sL').textContent=d.sensorLeft;
 document.getElementById('sR').textContent=d.sensorRight;
 document.getElementById('encL').textContent=d.leftTicks;
 document.getElementById('encR').textContent=d.rightTicks;
+document.getElementById('noiseRaw').textContent=d.noiseRaw || '0';
 document.getElementById('motorStatus').innerHTML='电机: '+(d.motorEnabled?'✅ 已启用':'❌ 已禁用');
 document.querySelectorAll('.state-box').forEach(el=>{el.classList.remove('active');if(parseInt(el.dataset.state)===d.stateCode){el.classList.add('active');}});
 var freeKB=d.freeSpaceKB||0;document.getElementById('freeSpace').textContent=freeKB+' KB';
@@ -4009,7 +4026,7 @@ document.getElementById('storageLabel').textContent=pct+'%';
 },500);
 </script>
 </body></html>)rawliteral";
-    }
+}
 
 public:
     static void init() {
@@ -4027,10 +4044,11 @@ public:
         // ★★★ A6/A7: 新增两个端点 ★★★
         server.on("/download/pop", handleDownloadPop);
         server.on("/download/chaos_snap", handleDownloadChaosSnap);
+        server.on("/download/frame_bin", handleDownloadFrameBin);
         server.onNotFound([](){ server.send(404, "text/plain", "Not Found"); });
         server.begin();
         Logger::log("Web server ready");
-    }
+        }
 
     static void handleClient() { server.handleClient(); }
 
@@ -4059,6 +4077,9 @@ public:
         json += "\"novelty\":" + String(g.noveltyScore, 4) + ",";
         json += "\"ruleCount\":" + String(g.ruleCount) + ",";
         json += "\"chaosTimeoutMs\":" + String(g.chaosTimeoutMs) + ",";
+        json += "\"chaosNoise\":" + String(MotorController::getChaosNoiseValue()) + ",";
+        json += "\"chaosAmplifier\":" + String(MotorController::getChaosNoiseAmplifier()) + ",";
+
         json += "\"state\":\"" + String(stateNames[MotorController::getMotorState()]) + "\",";
         json += "\"stateCode\":" + String(MotorController::getMotorState()) + ",";
         json += "\"survival\":" + String(millis() - EvolutionEngine::getTestStartTime()) + ",";
@@ -4339,6 +4360,35 @@ public:
         file.close();
         Logger::logf("📥 Downloaded: chaos_snaps_g%d_i%d.bin", gen, id);
     }
+
+    // ★★★ 新增：下载二进制帧日志（原始 .bin 文件）★★★
+static void handleDownloadFrameBin() {
+    if (!server.hasArg("gen") || !server.hasArg("id")) {
+        server.send(400, "text/plain", "Usage: /download/frame_bin?gen=1&id=0");
+        return;
+    }
+    int gen = server.arg("gen").toInt();
+    int id = server.arg("id").toInt();
+    if (gen < 1 || id < 0) {
+        server.send(400, "text/plain", "Invalid parameters (gen>=1, id>=0)");
+        return;
+    }
+    String path = "/frm_" + String(gen) + "_i" + String(id) + ".bin";
+    if (!SPIFFS.exists(path)) {
+        server.send(404, "text/plain", "File not found: " + path);
+        return;
+    }
+    File file = SPIFFS.open(path, FILE_READ);
+    if (!file) {
+        server.send(500, "text/plain", "Cannot open file");
+        return;
+    }
+    server.sendHeader("Content-Type", "application/octet-stream");
+    server.sendHeader("Content-Disposition", "attachment; filename=frm_" + String(gen) + "_i" + String(id) + ".bin");
+    server.streamFile(file, "application/octet-stream");
+    file.close();
+    Logger::logf("📥 Downloaded binary frame: frm_%d_i%d.bin", gen, id);
+}
 };
 
 WebServer CarWebServer::server(80);

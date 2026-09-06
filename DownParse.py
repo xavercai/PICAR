@@ -237,7 +237,44 @@ OEE 数据下载与转换工具 v4.0 - 新固件兼容版
     pip install requests
 ================================================================
 """
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+================================================================
+OEE 数据下载与转换工具 v4.1 - 适配 v9.22-ObserveOnly 固件
+仿草履虫应激机制 - 脱困能力进化系统 数据导出工具
 
+对应固件: OEETestFinal_v9919_Final_v741.ino (v9.22-ObserveOnly)
+================================================================
+
+【功能】
+1. 下载所有 SPIFFS 数据 (bin/csv/mrk 文件)
+2. 将二进制文件转换为可读 CSV
+3. 生成数据汇总报告
+
+【v4.1 更新说明】
+    - 修复 novelty_archive.bin 下载: 使用直接 SPIFFS 路径 /novelty_archive.bin
+    - 固件 v741 无 /download/novelty_archive 端点
+================================================================
+"""
+
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+================================================================
+OEE 数据下载与转换工具 v4.1 - 适配 v9.22-ObserveOnly 固件
+仿草履虫应激机制 - 脱困能力进化系统 数据导出工具
+对应固件: OEETestFinal_v9919_Final_v741.ino (v9.22-ObserveOnly)
+================================================================
+【功能】
+1. 下载所有 SPIFFS 数据 (bin/csv/mrk 文件)
+2. 将二进制文件转换为可读 CSV
+3. 生成数据汇总报告
+【v4.1 更新说明】
+    - 修复 novelty_archive.bin 下载: 使用直接 SPIFFS 路径 /novelty_archive.bin
+    - 固件 v741 无 /download/novelty_archive 端点
+================================================================
+"""
 import os
 import sys
 import struct
@@ -248,35 +285,28 @@ import re
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Tuple, Optional
-
 # ================================================================
 # 常量定义 - 与固件结构体严格对齐
 # ================================================================
-
 # Magic Numbers
 MAGIC_FILE_HEADER = 0x47454E45      # 'GENE'
 MAGIC_CHAOS_SNAPSHOT = 0x4348534E   # 'CHSN'
 MAGIC_NOVELTY_ARCHIVE = 0x41524348  # 'ARCH'
-
 # 结构体大小 (bytes)
 SIZE_FILE_HEADER = 24               # FileHeader
 SIZE_COMPRESSED_FRAME = 12          # CompressedFrameEntry
 SIZE_BEHAVIOR_RULE = 14             # BehaviorRule
 SIZE_CHAOS_SNAPSHOT_HEADER = 16     # ChaosSnapshotHeader
 SIZE_CHAOS_SNAPSHOT_ENTRY = 12      # ChaosSnapshotEntry
-
 # 固定参数
 POPULATION_SIZE = 16
 MAX_RULES = 16
 MIN_RULES = 2
-
 # 状态名称
 STATE_NAMES = ['IDLE', 'WALKING', 'STUCK', 'CHAOS']
-
 # 条件类型名称
 COND_NAMES = ['L', 'R', 'BOTH', 'ANY', 'DIST', 'TIME', 'IDLE', 'ALWAYS']
-
-# 端点映射 - 新固件 v9.21-RobustFixed
+# 端点映射 - v9.22-ObserveOnly 固件
 ENDPOINTS = {
     'list_files': '/list/files',
     'status': '/status',
@@ -288,10 +318,7 @@ ENDPOINTS = {
     'pop_bin': '/download/pop?gen={gen}',
     'frame_bin': '/download/frame_bin?gen={gen}&id={id}',
     'chaos_snap_bin': '/download/chaos_snap?gen={gen}&id={id}',
-    'novelty_archive': '/download/novelty_archive',
 }
-
-
 def crc32_calculate(data: bytes) -> int:
     """计算 CRC32 校验值 (与固件算法一致)"""
     crc = 0xFFFFFFFF
@@ -303,8 +330,6 @@ def crc32_calculate(data: bytes) -> int:
             else:
                 crc >>= 1
     return ~crc & 0xFFFFFFFF
-
-
 def parse_filename(name: str) -> Dict[str, any]:
     """解析文件名提取 gen 和 id"""
     result = {'gen': None, 'id': None, 'type': None}
@@ -365,12 +390,9 @@ def parse_filename(name: str) -> Dict[str, any]:
         result['type'] = 'unknown'
     
     return result
-
-
 # ================================================================
 # 任务1: 下载 SPIFFS 数据
 # ================================================================
-
 class SPIFFSDownloader:
     def __init__(self, ip: str, output_dir: str):
         self.base_url = f"http://{ip}"
@@ -480,8 +502,10 @@ class SPIFFSDownloader:
             self.download_file(ENDPOINTS['chaos_history'], "chaos_history.csv")
         if categories['population_summary']:
             self.download_file(ENDPOINTS['population_summary'], "population_summary.csv")
+        
+        # ★★★ v4.1 修复: novelty_archive 使用直接 SPIFFS 路径 /novelty_archive.bin ★★★
         if categories['novelty_archive']:
-            self.download_file(ENDPOINTS['novelty_archive'], "novelty_archive.bin")
+            self.download_file("/novelty_archive.bin", "novelty_archive.bin")
         
         print("\n[3/4] 下载种群BIN...")
         for name, info in categories['pop_bin']:
@@ -529,12 +553,9 @@ class SPIFFSDownloader:
         print(f"\n📁 保存到: {self.output_dir}")
         print(f"   成功: {self.stats['success']}, 失败: {self.stats['failed']}, 总大小: {self.stats['total_bytes']:,} bytes")
         return self.stats
-
-
 # ================================================================
 # 任务2: RAM 数据下载
 # ================================================================
-
 class RAMDataDownloader:
     def __init__(self, ip: str, output_dir: str):
         self.base_url = f"http://{ip}"
@@ -571,12 +592,9 @@ class RAMDataDownloader:
                 self.stats['failed'] += 1
         
         return self.stats
-
-
 # ================================================================
-# 任务3: BIN 转 CSV (与固件 v9.21-RobustFixed 严格对齐)
+# 任务3: BIN 转 CSV (与固件 v9.22-ObserveOnly 严格对齐)
 # ================================================================
-
 class BinToCsvConverter:
     def __init__(self, input_dir: str, output_dir: str):
         self.input_dir = Path(input_dir)
@@ -733,7 +751,7 @@ class BinToCsvConverter:
         self.stats['success'] += 1
     
     # ================================================================
-    # ★★★ 种群转换 - 修复版 (与 serializeIndividual 严格对齐) ★★★
+    # ★★★ 种群转换 - 与 serializeIndividual 严格对齐 ★★★
     # ================================================================
     def _convert_population(self, bin_file: Path):
         """
@@ -894,12 +912,9 @@ class BinToCsvConverter:
         
         print(f"  ✅ {bin_file.name} → {csv_path.name} ({count} 条)")
         self.stats['success'] += 1
-
-
 # ================================================================
 # 任务4: 生成汇总报告
 # ================================================================
-
 class ReportGenerator:
     def __init__(self, output_dir: str):
         self.output_dir = Path(output_dir)
@@ -946,21 +961,18 @@ class ReportGenerator:
             f.write("\n".join(lines))
         
         print(f"\n📄 汇总报告: {self.report_path}")
-
-
 # ================================================================
 # 主程序
 # ================================================================
-
 def main():
     parser = argparse.ArgumentParser(
-        description='OEE 数据工具 v4.0 - 新固件兼容版',
+        description='OEE 数据工具 v4.1 - 适配 v9.22-ObserveOnly 固件',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-  python oee_downloader_v4.py --ip 192.168.4.1 --output ./oee_data
-  python oee_downloader_v4.py --task convert --local-dir ./oee_data/spiffs_raw
-  python oee_downloader_v4.py --task spiffs --ip 192.168.4.1
+  python DownParse.py --ip 192.168.4.1 --output ./oee_data
+  python DownParse.py --task convert --local-dir ./oee_data/spiffs_raw
+  python DownParse.py --task spiffs --ip 192.168.4.1
         """
     )
     parser.add_argument('--ip', type=str, default='192.168.4.1', help='ESP32 IP地址')
@@ -972,8 +984,8 @@ def main():
     args = parser.parse_args()
     
     print("\n" + "=" * 70)
-    print("OEE 数据下载与转换工具 v4.0")
-    print("对应固件: v9.21-RobustFixed (2026-09-03)")
+    print("OEE 数据下载与转换工具 v4.1")
+    print("对应固件: v9.22-ObserveOnly (2026-09-05)")
     print("=" * 70)
     
     spiffs_dir = None
@@ -998,7 +1010,7 @@ def main():
             converter = BinToCsvConverter(str(spiffs_dir), args.output)
             convert_stats = converter.convert_all()
         else:
-            print("\n⚠️ SPIFFS 目录不存在，跳过转换: {spiffs_dir}")
+            print(f"\n⚠️ SPIFFS 目录不存在，跳过转换: {spiffs_dir}")
     
     if args.task in ['all', 'report']:
         reporter = ReportGenerator(args.output)
@@ -1008,7 +1020,5 @@ def main():
     print("✅ 完成!")
     print(f"📁 输出: {Path(args.output).absolute()}")
     print("=" * 70)
-
-
 if __name__ == '__main__':
     sys.exit(main())
